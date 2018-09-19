@@ -1,0 +1,169 @@
+{# Copyright 2015 Google Inc. All rights reserved.
+ Licensed under the Apache License, Version 2.0 (the "License");
+ you may not use this file except in compliance with the License.
+ You may obtain a copy of the License at
+     http://www.apache.org/licenses/LICENSE-2.0
+ Unless required by applicable law or agreed to in writing, software
+ distributed under the License is distributed on an "AS IS" BASIS,
+ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ See the License for the specific language governing permissions and
+ limitations under the License.
+#}
+
+resources:
+- name: condor-network
+  type: compute.v1.network
+  properties:
+    autoCreateSubnetworks: false
+- name: ssh-firewall-rule
+  type: compute.v1.firewall
+  properties:
+    network: $(ref.condor-network.selfLink)
+    sourceRanges: ["0.0.0.0/0"]
+    allowed:
+    - IPProtocol: TCP
+      ports: ["22"]
+- name: condor-subnet
+  type: compute.v1.subnetworks
+  properties:
+    network: $(ref.condor-network.selfLink)
+    ipCidrRange: 10.240.0.0/16
+    region: us-east1
+    privateIpGoogleAccess: true
+- name: all-internal-firewall-rule
+  type: compute.v1.firewall
+  properties:
+    network: $(ref.condor-network.selfLink)
+    sourceRanges: ["10.240.0.0/16"]
+    allowed:
+    - IPProtocol: TCP
+      ports: ["0-65535"]
+    - IPProtocol: UDP
+      ports: ["0-65535"]
+    - IPProtocol: ICMP
+- name: condor-master
+  type: compute.v1.instance
+  properties:
+    zone: {{ properties["zone"] }}
+    machineType: https://www.googleapis.com/compute/v1/projects/{{ env["project"] }}/zones/{{ properties["zone"] }}/machineTypes/{{ properties["instancetype"] }}
+    disks:
+    - deviceName: boot
+      type: PERSISTENT
+      boot: true
+      autoDelete: true
+      initializeParams:
+        sourceImage: https://www.googleapis.com/compute/v1/projects/{{ env["project"] }}/global/images/{{ properties["masterimage"] }}
+    networkInterfaces:
+    - subnetwork: $(ref.condor-subnet.selfLink)
+    serviceAccounts:
+      - email: "default"
+        scopes:
+        - 'https://www.googleapis.com/auth/cloud-platform'
+    tags:
+      items:
+        - condor-master
+
+- name: condor-submit
+  type: compute.v1.instance
+  properties:
+    zone: {{ properties["zone"] }}
+    machineType: https://www.googleapis.com/compute/v1/projects/{{ env["project"] }}/zones/{{ properties["zone"] }}/machineTypes/{{ properties["instancetype"] }}
+    disks:
+    - deviceName: boot
+      type: PERSISTENT
+      boot: true
+      autoDelete: true
+      initializeParams:
+        sourceImage: https://www.googleapis.com/compute/v1/projects/{{ env["project"] }}/global/images/{{ properties["submitimage"] }}
+    networkInterfaces:
+    - subnetwork: $(ref.condor-subnet.selfLink)
+      accessConfigs:
+      - name: External NAT
+        type: ONE_TO_ONE_NAT
+    serviceAccounts:
+      - email: "default"
+        scopes:
+        - 'https://www.googleapis.com/auth/cloud-platform'
+    tags:
+      items:
+        - condor-submit
+
+- name: condor-compute-pvm
+  type: compute.v1.instanceTemplate
+  properties:
+    project: {{ env["project"] }}
+    properties:
+      machineType: {{ properties["instancetype"] }}
+      disks:
+      - deviceName: boot
+        type: PERSISTENT
+        boot: true
+        autoDelete: true
+        initializeParams:
+          sourceImage: https://www.googleapis.com/compute/v1/projects/{{ env["project"] }}/global/images/{{ properties["computeimage"] }}
+      networkInterfaces:
+      - subnetwork: $(ref.condor-subnet.selfLink)
+      serviceAccounts:
+      - email: "default"
+        scopes:
+        - 'https://www.googleapis.com/auth/cloud-platform'
+      tags:
+        items:
+        - condor-compute-pvm
+      scheduling:
+        preemptible: true
+- name: condor-compute-pvm-igm
+  type: compute.v1.instanceGroupManagers
+  properties:
+    baseInstanceName: condor-compute-pvm-instance
+    instanceTemplate: $(ref.condor-compute-pvm.selfLink)
+    targetSize: {{ properties["pvmcount"] }}
+    zone: {{ properties["zone"] }}
+- name: condor-compute-pvm-as
+  type: compute.v1.autoscaler
+  properties:
+    zone: {{ properties["zone"] }}
+    target: $(ref.condor-compute-pvm-igm.selfLink)
+    autoscalingPolicy:
+      minNumReplicas: {{ properties["pvmcount"] }}
+      maxNumReplicas: {{ properties["pvmcount"] }}
+
+- name: condor-compute
+  type: compute.v1.instanceTemplate
+  properties:
+    project: {{ env["project"] }}
+    properties:
+      machineType: {{ properties["instancetype"] }}
+      disks:
+      - deviceName: boot
+        type: PERSISTENT
+        boot: true
+        autoDelete: true
+        initializeParams:
+          sourceImage: https://www.googleapis.com/compute/v1/projects/{{ env["project"] }}/global/images/{{ properties["computeimage"] }}
+      networkInterfaces:
+      - subnetwork: $(ref.condor-subnet.selfLink)
+      serviceAccounts:
+      - email: "default"
+        scopes:
+        - 'https://www.googleapis.com/auth/cloud-platform'
+      tags:
+        items:
+        - condor-compute
+      scheduling:
+        preemptible: false
+- name: condor-compute-igm
+  type: compute.v1.instanceGroupManagers
+  properties:
+    baseInstanceName: condor-compute-instance
+    instanceTemplate: $(ref.condor-compute.selfLink)
+    targetSize: {{ properties["count"] }}
+    zone: {{ properties["zone"] }}
+- name: condor-compute-as
+  type: compute.v1.autoscaler
+  properties:
+    zone: {{ properties["zone"] }}
+    target: $(ref.condor-compute-igm.selfLink)
+    autoscalingPolicy:
+      minNumReplicas: {{ properties["count"] }}
+      maxNumReplicas: {{ properties["count"] }}
